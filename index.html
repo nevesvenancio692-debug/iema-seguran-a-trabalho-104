@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IEMA Filmes e Agenda</title>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.2.0/firebase-app.js";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.2.0/firebase-auth.js";
+import { getDatabase, ref, set, get, child, push, onValue, remove, update } from "https://www.gstatic.com/firebasejs/10.2.0/firebase-database.js";
+
+// ================= FIREBASE =================
+const firebaseConfig = {
+  apiKey: "AIzaSyDPJcMfa4DCipjm_FZ8ltQ1eImeNY1K84Y",
+  authDomain: "iema-filmes-agenda-104.firebaseapp.com",
+  projectId: "iema-filmes-agenda-104",
+  storageBucket: "iema-filmes-agenda-104.firebasestorage.app",
+  messagingSenderId: "699483624647",
+  appId: "1:699483624647:web:618873d0fa372e1e7a5ae2"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getDatabase(app);
+
+// ================= LOGIN / CADASTRO =================
+window.cadastrar = async () => {
+  const email = document.getElementById("cadEmail").value;
+  const senha = document.getElementById("cadSenha").value;
+  const role = document.getElementById("cadRole").value;
+  const codigo = document.getElementById("cadCodigo").value;
+
+  if(role === "gestor" && codigo !== "IEMA"){
+    alert("Código de gestor incorreto!");
+    return;
+  }
+
+  try {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, senha);
+    const uid = userCredential.user.uid;
+    await set(ref(db, 'users/' + uid), { email, role });
+    alert("Cadastro realizado!");
+    window.location.reload();
+  } catch(error) {
+    alert("Erro: " + error.message);
+  }
+};
+
+window.entrar = async () => {
+  const email = document.getElementById("logEmail").value;
+  const senha = document.getElementById("logSenha").value;
+
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email, senha);
+    const uid = userCredential.user.uid;
+    const snapshot = await get(child(ref(db), 'users/' + uid));
+    if(snapshot.exists()){
+      const role = snapshot.val().role;
+      localStorage.setItem("uid", uid);
+      localStorage.setItem("role", role);
+      mostrarTela(role);
+    }
+  } catch(error){
+    alert("Erro no login: " + error.message);
+  }
+};
+
+function mostrarTela(role){
+  document.getElementById("loginCadastro").style.display = "none";
+  document.getElementById("telaParticipante").style.display = role==="participante" ? "block" : "none";
+  document.getElementById("telaGestor").style.display = role==="gestor" ? "block" : "none";
+  carregarFilmes();
+  carregarAgenda();
+  if(role==="gestor") carregarUsuarios();
+}
+
+// ================= FILMES =================
+const filmesRef = ref(db, "movies");
+
+window.adicionarFilme = async () => {
+  const nome = document.getElementById("filmeNome").value;
+  const partes = document.getElementById("filmePartes").value;
+  const inicio = document.getElementById("filmeInicio").value;
+  const fim = document.getElementById("filmeFim").value;
+  const uid = push(filmesRef).key;
+  await set(ref(db, "movies/" + uid), { nome, partes, inicio, fim });
+  carregarFilmes();
+  alert("Filme adicionado!");
+};
+
+function carregarFilmes(){
+  const lista = document.getElementById("listaFilmes");
+  lista.innerHTML = "";
+  onValue(filmesRef, snapshot => {
+    const hoje = new Date();
+    snapshot.forEach(filmeSnap => {
+      const f = filmeSnap.val();
+      const div = document.createElement("div");
+      let destaque = "";
+      if(new Date(f.inicio) <= hoje && new Date(f.fim) >= hoje) destaque = "style='background-color:yellow; padding:3px;'";
+      div.innerHTML = `<div ${destaque}>${f.nome} (${f.partes} partes) - ${f.inicio} até ${f.fim}</div>`;
+      lista.appendChild(div);
+    });
+  });
+}
+
+// ================= USUÁRIOS =================
+function carregarUsuarios(){
+  const lista = document.getElementById("listaUsuarios");
+  lista.innerHTML = "";
+  onValue(ref(db, "users"), snapshot => {
+    snapshot.forEach(userSnap => {
+      const u = userSnap.val();
+      const div = document.createElement("div");
+      div.innerHTML = `${u.email} - ${u.role} <button onclick="removerUsuario('${userSnap.key}')">Remover</button>`;
+      lista.appendChild(div);
+    });
+  });
+}
+
+window.removerUsuario = async (uid) => {
+  if(confirm("Deseja remover este usuário?")){
+    await remove(ref(db, "users/" + uid));
+    carregarUsuarios();
+  }
+};
+
+// ================= AGENDA / CALENDÁRIO =================
+const agendaRef = ref(db, "events");
+let mesAtual = new Date().getMonth();
+let anoAtual = new Date().getFullYear();
+
+window.adicionarEvento = async () => {
+  const nome = document.getElementById("eventoNome").value;
+  const inicio = document.getElementById("eventoInicio").value;
+  const fim = document.getElementById("eventoFim").value;
+  const tipo = document.getElementById("eventoTipo").value;
+  const uid = push(agendaRef).key;
+  await set(ref(db, "events/" + uid), { nome, inicio, fim, tipo });
+  carregarAgenda();
+  alert("Evento adicionado!");
+};
+
+function carregarAgenda(){
+  const lista = document.getElementById("calendario");
+  lista.innerHTML = "";
+
+  const diasNoMes = new Date(anoAtual, mesAtual+1, 0).getDate();
+
+  for(let i=1;i<=diasNoMes;i++){
+    const div = document.createElement("div");
+    div.className = "dia";
+    div.dataset.dia = i;
+    div.innerHTML = `<strong>${i}</strong>`;
+    div.onclick = () => adicionarEventoDia(i);
+    lista.appendChild(div);
+  }
+
+  onValue(agendaRef, snapshot => {
+    const hoje = new Date();
+    snapshot.forEach(eventSnap => {
+      const e = eventSnap.val();
+      const data = new Date(e.inicio);
+      if(data.getMonth() === mesAtual && data.getFullYear() === anoAtual){
+        const dia = data.getDate();
+        const divEvento = document.createElement("div");
+        let cor = "black";
+        if(new Date(e.fim) < hoje) cor="red";
+        else if(e.tipo==="evento escolar") cor="green";
+        else cor="blue";
+        divEvento.style.color = cor;
+        divEvento.innerText = `${e.nome} (${e.tipo})`;
+        lista.children[dia-1].appendChild(divEvento);
+      }
+    });
+  });
+
+  document.getElementById("mesAno").innerText = `${mesAtual+1}/${anoAtual}`;
+}
+
+window.adicionarEventoDia = async (dia) => {
+  const nome = prompt("Nome do evento:");
+  if(!nome) return;
+  const tipo = prompt("Tipo (atividade/evento escolar):","atividade");
+  const inicio = new Date(anoAtual, mesAtual, dia).toISOString();
+  const fim = inicio;
+  const uid = push(agendaRef).key;
+  await set(ref(db, "events/" + uid), { nome, inicio, fim, tipo });
+  carregarAgenda();
+}
+
+window.mesAnterior = () => { mesAtual--; if(mesAtual<0){ mesAtual=11; anoAtual--; } carregarAgenda(); }
+window.mesProximo = () => { mesAtual++; if(mesAtual>11){ mesAtual=0; anoAtual++; } carregarAgenda(); }
+
+</script>
+
+<style>
+body { font-family: Arial; margin: 20px; background-color:#f0f2f5; }
+#telaGestor, #telaParticipante { display: none; margin-top: 20px; }
+input, select, button { margin: 5px; padding: 5px; }
+#agendaBtn { position: fixed; top: 20px; left: 20px; background-color: green; color: white; padding: 10px; border:none; border-radius:5px; cursor:pointer; }
+#listaFilmes div, #listaUsuarios div { margin:3px; padding:5px; border-radius:3px; }
+#calendario { display: grid; grid-template-columns: repeat(7,1fr); gap:5px; margin-top:10px; }
+.dia { border:1px solid #ccc; padding:5px; background:#fff; cursor:pointer; min-height:50px; }
+#navMes { margin:10px 0; }
+</style>
+</head>
+<body>
+
+<h1>IEMA Filmes e Agenda</h1>
+<button id="agendaBtn" onclick="document.getElementById('calendario').scrollIntoView()">Agenda</button>
+
+<div id="loginCadastro">
+  <h2>Login</h2>
+  <input id="logEmail" type="email" placeholder="E-mail"><br>
+  <input id="logSenha" type="password" placeholder="Senha"><br>
+  <button onclick="entrar()">Entrar</button>
+
+  <h2>Cadastro</h2>
+  <input id="cadEmail" type="email" placeholder="E-mail"><br>
+  <input id="cadSenha" type="password" placeholder="Senha"><br>
+  <select id="cadRole">
+    <option value="participante">Participante</option>
+    <option value="gestor">Gestor</option>
+  </select><br>
+  <input id="cadCodigo" type="text" placeholder="Código do Gestor (se aplicável)"><br>
+  <button onclick="cadastrar()">Cadastrar</button>
+</div>
+
+<div id="telaParticipante">
+  <h2>Filmes da Semana</h2>
+  <div id="listaFilmes"></div>
+  <h2>Calendário</h2>
+  <div id="navMes">
+    <button onclick="mesAnterior()">◀</button>
+    <span id="mesAno"></span>
+    <button onclick="mesProximo()">▶</button>
+  </div>
+  <div id="calendario"></div>
+</div>
+
+<div id="telaGestor">
+  <h2>Filmes</h2>
+  Nome: <input id="filmeNome"><br>
+  Partes: <input id="filmePartes" type="number"><br>
+  Início: <input id="filmeInicio" type="datetime-local"><br>
+  Fim: <input id="filmeFim" type="datetime-local"><br>
+  <button onclick="adicionarFilme()">Adicionar Filme</button>
+  <div id="listaFilmes"></div>
+
+  <h2>Agenda</h2>
+  Nome: <input id="eventoNome"><br>
+  Início: <input id="eventoInicio" type="datetime-local"><br>
+  Fim: <input id="eventoFim" type="datetime-local"><br>
+  Tipo: 
+  <select id="eventoTipo">
+    <option value="atividade">Atividade</option>
+    <option value="evento escolar">Evento Escolar</option>
+  </select><br>
+  <button onclick="adicionarEvento()">Adicionar Evento</button>
+
+  <div id="navMes">
+    <button onclick="mesAnterior()">◀</button>
+    <span id="mesAno"></span>
+    <button onclick="mesProximo()">▶</button>
+  </div>
+  <div id="calendario"></div>
+
+  <h2>Usuários Cadastrados</h2>
+  <div id="listaUsuarios"></div>
+</div>
+
+</body>
+</html>
